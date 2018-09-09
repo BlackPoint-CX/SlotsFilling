@@ -6,6 +6,10 @@ from base_model import BaseModel
 import tensorflow as tf
 import numpy as np
 
+import progressbar
+
+from commons import get_chunks, pad_sequences
+
 
 class Progbar(object):
     pass
@@ -59,45 +63,17 @@ class SlotFillingModel(BaseModel):
 
             word_embeddings = tf.nn.embedding_lookup(parmas=_word_embeddings, ids=self.word_ids, name='word_embeddings')
 
-        with tf.variable_scope('add_word_embeddings_op_chars'):
-            if self.config.use_chars:
-                _char_embeddings = tf.get_variable(name='_char_embeddings',
-                                                   shape=[self.config.nchars, self.config.nchars], dtype=tf.float32, )
-                char_embeddings = tf.nn.embedding_lookup(params=_char_embeddings, ids=tf.char_idx,
-                                                         name='char_embeddings')
-
-                s = tf.shape(char_embeddings)
-                char_embeddings = tf.reshape(tensor=char_embeddings, shape=[s[0] * s[1], s[-2], self.config.dim_char])
-                word_lengths = tf.reshape(tensor=self.word_lengths, shape=[s[0] * s[1]])
-
-                cell_fw = tf.nn.rnn_cell.LSTMCell(self.config.hidden_size_char,
-                                                  state_is_tuple=True)
-                cell_bw = tf.nn.rnn_cell.LSTMCell(num_units=self.config.hidden_size_char, state_is_tuple=True)
-
-                _output = tf.nn.bidirectional_dynamic_rnn(cell_fw=cell_fw, cell_bw=cell_bw, inputs=char_embeddings,
-                                                          sequence_length=word_lengths, dtype=tf.float32)
-
-                ((output_fw, output_bw), (output_state_fw, output_state_bw)) = _output
-
-                # _, ((_, output_fw), (_, output_bw)) = _output
-
-                output = tf.concat(values=[output_fw, output_bw], axis=-1)
-
-                output = tf.reshape(tensor=output, shape=[s[0], s[1], 2 * self.config.hidden_size_char])
-
-                word_embeddings = tf.concat(values=[word_embeddings, output], axis=-1)
-
         self.word_embeddings = tf.nn.dropout(x=word_embeddings, keep_prob=self.dropout)
 
     def add_logits_op(self):
         with tf.variable_scope('add_logits_op_bi_lstm'):
-            cell_fw = tf.nn.rnn_cell.LSTMCell(num_units=tf.config.hidden_size_lstm)
-            cell_bw = tf.nn.rnn_cell.LSTMCell(num_units=tf.config.hidden_size_lstm)
+            cell_fw = tf.nn.rnn_cell.LSTMCell(num_units=self.config.hidden_size_lstm)
+            cell_bw = tf.nn.rnn_cell.LSTMCell(num_units=self.config.hidden_size_lstm)
             ((output_fw, output_bw), (output_state_fw, output_state_bw)) = tf.nn.bidirectional_dynamic_rnn(
                 cell_fw=cell_fw, cell_bw=cell_bw, inputs=self.word_embeddings,
                 sequence_length=self.sequence_lengths, dtype=tf.float32)
             output = tf.concat([output_fw, output_bw], axis=1)
-            output = tf.nn.dropout(x=output, keep_prob=tf.config.dropout)
+            output = tf.nn.dropout(x=output, keep_prob=self.config.dropout)
 
         with tf.variable_scope('proj'):
             W = tf.get_variable(name='W', shape=[2 * self.config.hidden_size_lstm, self.config.ntags])
@@ -174,13 +150,14 @@ class SlotFillingModel(BaseModel):
     def run_epoch(self, train, dev, epoch):
         batch_size = self.config.batch_size
         nbatches = (len(train) + batch_size - 1) // batch_size
-        prog = Progbar(target=nbatches)
+        prog = progressbar.ProgressBar(nbatches)
 
         for i, (words, labels) in enumerate(minibatches(train, batch_size)):
             fd, sequence_lengths = self.get_feed_dict(words=words, labels=labels, lr=self.config.lr,
                                                       dropout=self.config.dropout)
             _, train_loss, summary = self.sess.run(fetchs=[self.train_op, self.loss, self.merged], feed_dict=fd)
-            prog.update(i + 1, [('train_loss', train_loss)])
+            prog.update(i + 1)
+            self.logger.info('train_loss : {} at batch {}'.format(train_loss, i))
 
             if i % 10 == 0:
                 self.file_writer.add_summary(summary=summary, global_step=epoch * batch_size + 1)
@@ -215,75 +192,15 @@ class SlotFillingModel(BaseModel):
         accs = np.mean(accs)
         return {'accs': accs, 'f1': f1}
 
-
-def get_chunks(seq, tag_idx):
-    """
-
-    :param seq:
-    :param tag_idx:
-    :return:
-
-    Example :
-        seq : [1,2,0,3]
-        tag_idx : {'B-PER' : 1, 'I-PER': 2, 'B-ORG' : 3, 'O' : 0}
-        chunks : [('PER', 0 ,2), ('ORG',3,4)]
-    """
-    NONE = 'O'
-    default = tag_idx[NONE]
-    idx2tag = {idx: tag for tag, idx in tag_idx.items()}
-    chunks = []
-    chunk_type, chunk_start = None, None  # These two should be changed together.
-    for i, tok in enumerate(seq):
-        if tok == default:  # Cut by 'O'
-            if chunk_type is None:
-                pass
-            else:
-                chunk = (chunk_type, chunk_start, i)
-                chunks.append(chunk)
-                chunk_type, chunk_start = None, None
-        else:
-            tok_BIO, tok_type = get_chunk_type(tok, idx2tag)
-            if chunk_type is None:
-                if tok_BIO == 'B':
-                    chunk_type = tok_type
-                    chunk_start = i
-                else:
-                    pass  # wrong case of  'O O I-PER I-PER'
-            else:
-                if tok_BIO == 'B':
-                    chunk = (chunk_type, chunk_start, i)
-                    chunks.append(chunk)
-                    chunk_type = tok_type
-                    chunk_start = i
-                elif tok_BIO == 'O':
-                    chunk = (chunk_type, chunk_start, i)
-                    chunks.append(chunk)
-                    chunk_type, chunk_start = None, None
-                else:
-                    # tok_BIO = 'I'
-                    if tok_type == chunk_type:
-                        pass
-                    else:
-                        chunk = (chunk_type, chunk_start, i)
-                        chunks.append(chunk)
-                        chunk_type, chunk_start = None, None
-
-    if chunk_type is not None:
-        chunk = (chunk_type, chunk_start, len(seq))
-        chunks.append(chunk)
-
-    return chunks
-
-
-def get_chunk_type(idx, idx2tag):
-    tag = idx2tag(idx)
-    tag_BIO, tag_type = tag.split('-')
-    return tag_BIO, tag_type
+    def predict(self, words_raw):
+        words = [self.config.processing_word(w) for w in words_raw]
+        if type(words[0]) == tuple:
+            words = zip(*words)
+        pred_ids, sequence_lengths = self.predict_batch([words])
+        # Translate id with associate tag
+        preds = [self.idx2tag[pred_id] for pred_id in pred_ids]
+        return preds
 
 
 def minibatches(data, minibatch_size):
-    pass
-
-
-def pad_sequences(sequences, pad_token, nlevel=1):
     pass
