@@ -1,15 +1,16 @@
-from random import random
+from copy import deepcopy
+import random
 from commons import TAG2LABEL, LABEL2TAG, WORD2ID, ID2WORD
 
 
 class DataManager(object):
-    def __init__(self, data_file_path, processing_word=None, prosessing_tag=None):
+    def __init__(self, data_file_path, word2id=WORD2ID, tag2label=TAG2LABEL):
         self.data_file_path = data_file_path
-        self.processing_word = processing_word
-        self.processing_tag = prosessing_tag
+        self.word2id = word2id
+        self.tag2label = tag2label
         self.length = None
         self.origin_data = self.build_data()
-        self.preprocess_data = self.preprocess_data()
+        self.pp_data = self.preprocess_data()
 
     def build_data(self):
         """
@@ -41,19 +42,22 @@ class DataManager(object):
             sentence_ids = []
             sentence_labels = []
             for word in sentence_words:
-                word_id = WORD2ID[word]
+                word_id = self.word2id[word]
                 sentence_ids.append(word_id)
             for tag in sentence_tags:
-                label = TAG2LABEL[tag]
+                label = self.tag2label[tag]
                 sentence_labels.append(label)
             data.append((sentence_ids, sentence_labels))
         return data
 
-    def __iter__(self, batch_size, shuffle=False):
+    def __iter__(self):
+        batch_size = 20
+        shuffle = True
         if shuffle:
-            data = random.shuffle(self.preprocess_data)
+            data = deepcopy(self.pp_data)
+            random.shuffle(data)
         else:
-            data = self.preprocess_data
+            data = self.pp_data
 
         ids, labels = [], []
         for (sentence_ids, sentence_labels) in data:
@@ -65,6 +69,7 @@ class DataManager(object):
 
         if len(ids):
             yield ids, labels
+
 
     def __len__(self):
         if self.length is None:

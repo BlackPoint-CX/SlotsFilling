@@ -47,17 +47,17 @@ class BaseModel(object):
         init = tf.variables_initializer(variables)
         self.sess.run(init)
 
-    def add_train_op(self, lr_method, lr, loss, clip=-1):
-        _lr_method = lr_method.lower()
+    def add_train_op(self, optimizer, lr, loss, clip=-1):
+        _optimizer = optimizer.lower()
 
-        with tf.variable_scope('train step'):
-            if _lr_method == 'adam':
+        with tf.variable_scope('train_step'):
+            if _optimizer == 'adam':
                 optimizer = tf.train.AdamOptimizer(lr)
-            elif _lr_method == 'sgd':
+            elif _optimizer == 'sgd':
                 optimizer = tf.train.GradientDescentOptimizer(lr)
-            elif _lr_method == 'adagrad':
+            elif _optimizer == 'adagrad':
                 optimizer = tf.train.AdagradDAOptimizer(lr)
-            elif _lr_method == 'rmsprop':
+            elif _optimizer == 'rmsprop':
                 optimizer = tf.train.RMSPropOptimizer(lr)
             else:
                 raise NotImplementedError('Optimizer cannot be recognized. Plz check again.')
@@ -74,7 +74,7 @@ class BaseModel(object):
         epochs_no_impv = 0
         self.add_summary()
 
-        for epoch_idx in range(self.config.epoch_num):
+        for epoch_idx in range(self.config.epoch):
             self.logger.info('Running Epoch {}.'.format(epoch_idx))
             score = self.run_epoch(train, dev, epoch_idx)
             self.config.lr *= self.config.lr_decay

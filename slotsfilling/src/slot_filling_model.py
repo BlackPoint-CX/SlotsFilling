@@ -1,24 +1,17 @@
-from copy import deepcopy
-
 from tensorflow.contrib.crf import crf_log_likelihood, viterbi_decode
 
 from base_model import BaseModel
 import tensorflow as tf
 import numpy as np
+from progressbar import ProgressBar
 
-import progressbar
-
-from commons import get_chunks, pad_sequences
-
-
-class Progbar(object):
-    pass
+from commons import get_chunks, pad_sequences, WORD2ID, LABEL2TAG, TAG2LABEL
 
 
 class SlotFillingModel(BaseModel):
     def __init__(self, config):
-        super(SlotFillingModel, self).__init__()
-        self.idx2tag = deepcopy(self.config.idx2tag)
+        super(SlotFillingModel, self).__init__(config)
+        self.config = config
 
     def build(self):
         self.add_placeholder_op()
@@ -26,42 +19,36 @@ class SlotFillingModel(BaseModel):
         self.add_logits_op()
         self.add_pred_op()
         self.add_loss_op()
-
-        self.add_train_op(lr_method=self.config.lr_method, lr=self.config.lr, loss=self.loss, clip=self.config.clip)
-
+        self.add_train_op(optimizer=self.config.optimizer, lr=self.config.lr, loss=self.loss, clip=self.config.clip)
         self.init_session()
 
     def add_placeholder_op(self):
         # Shape of (batch_size, max length of sequences)
-        self.word_ids = tf.placeholder(dtype=tf.float32, shape=[None, None], name='word_ids')
+        self.word_ids = tf.placeholder(dtype=tf.int32, shape=[None, None], name='word_ids')
 
         # Shape of (batch_size)
-        self.sequence_lengths = tf.placeholder(dtype=tf.float32, shape=[None], name='sequence_length')
-
-        # Shape of (batch_size, max length of sequences, max length of word)
-        self.char_ids = tf.placeholder(dtype=tf.float32, shape=[None, None, None], name='char_ids')
-
-        # Shape of (batch_size, max length of sentences)
-        self.word_lengths = tf.placeholder(dtype=tf.float32, shape=[None, None], name='word_length')
+        self.sequence_lengths = tf.placeholder(dtype=tf.int32, shape=[None], name='sequence_length')
 
         # Shape of (batch_size, max length of sentence in batch)
-        self.labels = tf.placeholder(dtype=tf.float32, shape=[None, None], name='labels')
+        self.labels = tf.placeholder(dtype=tf.int32, shape=[None, None], name='labels')
 
         # Hyper parameters
         self.dropout = tf.placeholder(dtype=tf.float32, shape=[], name='dropout')
-        self.lr = tf.placeholder(dtype=tf.float32, shape=[], name='learning rate')
+        self.lr = tf.placeholder(dtype=tf.float32, shape=[], name='learning_rate')
 
     def add_word_embedding_op(self):
         with tf.variable_scope('add_word_embeddings_op_words'):
-            if self.config.embeddings is None:
-                self.logger.info('Warning : Random Initialze Embeddings.')
+            if self.config.pretrain_embeddings is None:
+                self.logger.info('Warning : Random Initialize Embeddings.')
                 _word_embeddings = tf.get_variable(name='_word_embeddings',
-                                                   shape=[self.config.nwords, self.config.dim_word], dtype=tf.float32)
+                                                   shape=[self.config.nwords, self.config.embedding_dim],
+                                                   dtype=tf.float32)
             else:
-                _word_embeddings = tf.Variable(initial_value=self.config.embeddings, name='_word_embeddings',
-                                               dtype=tf.float32, trainable=self.config.train_embeddings)
+                _word_embeddings = tf.Variable(initial_value=self.config.pretrain_embeddings,
+                                               name='_word_embeddings',
+                                               dtype=tf.float32, trainable=self.config.train_embedding)
 
-            word_embeddings = tf.nn.embedding_lookup(parmas=_word_embeddings, ids=self.word_ids, name='word_embeddings')
+            word_embeddings = tf.nn.embedding_lookup(params=_word_embeddings, ids=self.word_ids, name='word_embeddings')
 
         self.word_embeddings = tf.nn.dropout(x=word_embeddings, keep_prob=self.dropout)
 
@@ -76,13 +63,13 @@ class SlotFillingModel(BaseModel):
             output = tf.nn.dropout(x=output, keep_prob=self.config.dropout)
 
         with tf.variable_scope('proj'):
-            W = tf.get_variable(name='W', shape=[2 * self.config.hidden_size_lstm, self.config.ntags])
-            b = tf.get_variable(name='b', shape=[self.config.ntags])
+            W = tf.get_variable(name='W', shape=[2 * self.config.hidden_size_lstm, self.config.nlabels])
+            b = tf.get_variable(name='b', shape=[self.config.nlabels])
             nsteps = tf.shape(output)[1]
             output = tf.reshape(tensor=output, shape=[-1, 2 * self.config.hidden_size_lstm])
             pred = tf.matmul(output, W) + b
 
-        self.logits = tf.reshape(tensor=pred, shape=[-1, nsteps, self.config.ntags])
+        self.logits = tf.reshape(tensor=pred, shape=[-1, nsteps, self.config.nlabels])
 
     def add_pred_op(self):
         if not self.config.use_crf:
@@ -90,7 +77,7 @@ class SlotFillingModel(BaseModel):
 
     def add_loss_op(self):
         if self.config.use_crf:
-            log_likelihood, trans_params = crf_log_likelihood(inputs=self.word_ids, tag_indices=self.labels,
+            log_likelihood, trans_params = crf_log_likelihood(inputs=self.logits, tag_indices=self.labels,
                                                               sequence_lengths=self.sequence_lengths)
             self.trans_params = trans_params
             self.loss = tf.reduce_mean(-log_likelihood)
@@ -103,21 +90,13 @@ class SlotFillingModel(BaseModel):
         tf.summary.scalar('loss', self.loss)
 
     def get_feed_dict(self, words, labels=None, lr=None, dropout=None):
-        if self.config.use_chars:
-            char_ids, word_ids = zip(*words)
-            word_ids, sequence_lengths = pad_sequences(word_ids, pad_token=0, nlevel=1)
-            char_ids, word_lengths = pad_sequences(char_ids, pad_token=0, nlevel=2)
-        else:
-            word_ids, sequences = pad_sequences(words, 0)
+
+        word_ids, sequence_lengths = pad_sequences(words, 0)
 
         feed_dict = {
             self.word_ids: word_ids,
             self.sequence_lengths: sequence_lengths
         }
-
-        if self.config.use_chars:
-            feed_dict[self.char_ids] = char_ids
-            feed_dict[self.word_lengths] = word_lengths
 
         if labels is not None:
             labels, _ = pad_sequences(labels, pad_token=0)
@@ -150,12 +129,13 @@ class SlotFillingModel(BaseModel):
     def run_epoch(self, train, dev, epoch):
         batch_size = self.config.batch_size
         nbatches = (len(train) + batch_size - 1) // batch_size
-        prog = progressbar.ProgressBar(nbatches)
+        prog = ProgressBar(nbatches)
 
-        for i, (words, labels) in enumerate(minibatches(train, batch_size)):
+        for i, (words, labels) in enumerate(train):
             fd, sequence_lengths = self.get_feed_dict(words=words, labels=labels, lr=self.config.lr,
                                                       dropout=self.config.dropout)
-            _, train_loss, summary = self.sess.run(fetchs=[self.train_op, self.loss, self.merged], feed_dict=fd)
+            _, train_loss, summary = self.sess.run(fetches=[self.train_op, self.loss, self.merged], feed_dict=fd)
+
             prog.update(i + 1)
             self.logger.info('train_loss : {} at batch {}'.format(train_loss, i))
 
@@ -170,7 +150,7 @@ class SlotFillingModel(BaseModel):
     def run_evaluate(self, test):
         accs = []
         correct_preds, total_correct, total_preds = 0., 0., 0.
-        for words, labels in minibatches(test, self.config.batch_size):
+        for words, labels in test:
 
             label_preds, sequence_lengths = self.predict_batch(words=words)
 
@@ -179,8 +159,8 @@ class SlotFillingModel(BaseModel):
                 label_pred = label_pred[:length]
 
                 accs += [label == pred for (label, pred) in zip(label, label_pred)]
-                label_chunks = set(get_chunks(label, self.config.tag_idx))
-                label_pred_chunks = set(get_chunks(label_pred, self.config.tag_idx))
+                label_chunks = set(get_chunks(label, TAG2LABEL))
+                label_pred_chunks = set(get_chunks(label_pred, TAG2LABEL))
 
                 correct_preds += len(label_chunks & label_pred_chunks)
                 total_preds += len(label_pred_chunks)
@@ -193,14 +173,8 @@ class SlotFillingModel(BaseModel):
         return {'accs': accs, 'f1': f1}
 
     def predict(self, words_raw):
-        words = [self.config.processing_word(w) for w in words_raw]
-        if type(words[0]) == tuple:
-            words = zip(*words)
+        words = [WORD2ID(w) for w in words_raw]
         pred_ids, sequence_lengths = self.predict_batch([words])
         # Translate id with associate tag
-        preds = [self.idx2tag[pred_id] for pred_id in pred_ids]
+        preds = [LABEL2TAG[pred_id] for pred_id in pred_ids]
         return preds
-
-
-def minibatches(data, minibatch_size):
-    pass
