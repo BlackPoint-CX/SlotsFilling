@@ -61,18 +61,14 @@ class SlotFillingModel(BaseModel):
                 sequence_length=self.sequence_lengths, dtype=tf.float32)
             output = tf.concat([output_fw, output_bw], axis=-1)
             output = tf.nn.dropout(x=output, keep_prob=self.config.dropout)
-            print('output.shape after bi_lstm', output.shape)
 
         with tf.variable_scope('proj'):
             W = tf.get_variable(name='W', shape=[2 * self.config.hidden_size_lstm, self.config.nlabels])
             b = tf.get_variable(name='b', shape=[self.config.nlabels])
             nsteps = tf.shape(output)[1]
-
             output = tf.reshape(tensor=output, shape=[-1, 2 * self.config.hidden_size_lstm])
-            print('output.shape', output.shape)
             pred = tf.matmul(output, W) + b
             self.logits = tf.reshape(tensor=pred, shape=[-1, nsteps, self.config.nlabels])
-            print('logits.shape', self.logits.shape)
 
     def add_pred_op(self):
         if not self.config.use_crf:
@@ -176,8 +172,12 @@ class SlotFillingModel(BaseModel):
         return {'accs': accs, 'f1': f1}
 
     def predict(self, words_raw):
-        words = [WORD2ID(w) for w in words_raw]
+        words = [WORD2ID[w] for w in words_raw]
         pred_ids, sequence_lengths = self.predict_batch([words])
+        sequence_lengths = sequence_lengths[0]
+        pred_ids = pred_ids[0][:sequence_lengths]
+        print(pred_ids)
+
         # Translate id with associate tag
-        preds = [LABEL2TAG[pred_id] for pred_id in pred_ids]
-        return preds
+        tags = [LABEL2TAG[pred_id] for pred_id in pred_ids]
+        return pred_ids, tags

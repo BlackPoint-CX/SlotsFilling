@@ -19,7 +19,7 @@ class BaseModel(object):
     def save_session(self):
         self.logger.info('Save tf session.')
         if not os.path.exists(self.config.model_dir):
-            os.mkdir(self.config.model_dir)
+            os.makedirs(self.config.model_dir)
         self.saver.save(self.sess, self.config.model_dir)
 
     def cloes_sess(self):
@@ -83,7 +83,7 @@ class BaseModel(object):
             else:
                 epochs_no_impv += 1
                 if epochs_no_impv > self.config.epochs_no_impv:
-                    self.logger.info()
+                    self.logger.info('No Improvement. Break. ')
                     break
 
     def evaluate(self, test):
