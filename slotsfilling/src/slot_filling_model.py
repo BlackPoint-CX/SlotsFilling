@@ -44,12 +44,12 @@ class SlotFillingModel(BaseModel):
                                                    shape=[self.config.nwords, self.config.embedding_dim],
                                                    dtype=tf.float32)
             else:
+                self.logger.info('Using Pretrain Embeddings.')
                 _word_embeddings = tf.Variable(initial_value=self.config.pretrain_embeddings,
                                                name='_word_embeddings',
-                                               dtype=tf.float32, trainable=self.config.train_embedding)
-
+                                               dtype=tf.float32, trainable=self.config.train_embedding,
+                                               expected_shape=[self.config.nwords, self.config.embedding_dim])
             word_embeddings = tf.nn.embedding_lookup(params=_word_embeddings, ids=self.word_ids, name='word_embeddings')
-
         self.word_embeddings = tf.nn.dropout(x=word_embeddings, keep_prob=self.dropout)
 
     def add_logits_op(self):
@@ -59,17 +59,20 @@ class SlotFillingModel(BaseModel):
             ((output_fw, output_bw), (output_state_fw, output_state_bw)) = tf.nn.bidirectional_dynamic_rnn(
                 cell_fw=cell_fw, cell_bw=cell_bw, inputs=self.word_embeddings,
                 sequence_length=self.sequence_lengths, dtype=tf.float32)
-            output = tf.concat([output_fw, output_bw], axis=1)
+            output = tf.concat([output_fw, output_bw], axis=-1)
             output = tf.nn.dropout(x=output, keep_prob=self.config.dropout)
+            print('output.shape after bi_lstm', output.shape)
 
         with tf.variable_scope('proj'):
             W = tf.get_variable(name='W', shape=[2 * self.config.hidden_size_lstm, self.config.nlabels])
             b = tf.get_variable(name='b', shape=[self.config.nlabels])
             nsteps = tf.shape(output)[1]
-            output = tf.reshape(tensor=output, shape=[-1, 2 * self.config.hidden_size_lstm])
-            pred = tf.matmul(output, W) + b
 
-        self.logits = tf.reshape(tensor=pred, shape=[-1, nsteps, self.config.nlabels])
+            output = tf.reshape(tensor=output, shape=[-1, 2 * self.config.hidden_size_lstm])
+            print('output.shape', output.shape)
+            pred = tf.matmul(output, W) + b
+            self.logits = tf.reshape(tensor=pred, shape=[-1, nsteps, self.config.nlabels])
+            print('logits.shape', self.logits.shape)
 
     def add_pred_op(self):
         if not self.config.use_crf:
@@ -79,6 +82,7 @@ class SlotFillingModel(BaseModel):
         if self.config.use_crf:
             log_likelihood, trans_params = crf_log_likelihood(inputs=self.logits, tag_indices=self.labels,
                                                               sequence_lengths=self.sequence_lengths)
+
             self.trans_params = trans_params
             self.loss = tf.reduce_mean(-log_likelihood)
         else:
@@ -111,25 +115,24 @@ class SlotFillingModel(BaseModel):
         return feed_dict, sequence_lengths
 
     def predict_batch(self, words):
-        fd, sequence_lengths = self.get_feed_dict(words=words, dropout=1.0)
+        fd, sequence_lengths = self.get_feed_dict(words=words, dropout=0.5)
         if self.config.use_crf:
             viterbi_sequences = []
-            logits, trans_params = self.sess.run(fetchs=[self.logits, self.trans_params], feed_dict=fd)
-
+            logits, trans_params = self.sess.run(fetches=[self.logits, self.trans_params], feed_dict=fd)
             for logit, sequence_length in zip(logits, sequence_lengths):
                 logit = logit[:sequence_length]
                 viterbi_seq, viterbi_score = viterbi_decode(score=logit, transition_params=trans_params)
                 viterbi_sequences += [viterbi_seq]
-
-            return viterbi_sequences, sequence_lengths
+            labels_pred = viterbi_sequences
         else:
             labels_pred = self.sess.run(self.labels_pred, feed_dict=fd)
-            return labels_pred, sequence_lengths
+
+        return labels_pred, sequence_lengths
 
     def run_epoch(self, train, dev, epoch):
         batch_size = self.config.batch_size
         nbatches = (len(train) + batch_size - 1) // batch_size
-        prog = ProgressBar(nbatches)
+        prog = ProgressBar(nbatches).start()
 
         for i, (words, labels) in enumerate(train):
             fd, sequence_lengths = self.get_feed_dict(words=words, labels=labels, lr=self.config.lr,

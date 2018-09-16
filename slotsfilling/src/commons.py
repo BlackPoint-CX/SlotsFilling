@@ -122,7 +122,7 @@ def get_chunk_type(label, label2tag):
     :param label2tag:
     :return:
     """
-    tag = label2tag(label)
+    tag = label2tag[label]
     tag_BIO, tag_type = tag.split('-')
     return tag_BIO, tag_type
 

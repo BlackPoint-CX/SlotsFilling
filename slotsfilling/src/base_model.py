@@ -10,9 +10,6 @@ class BaseModel(object):
         self.sess = None
         self.saver = None
 
-    def save_session(self):
-        pass
-
     def init_session(self):
         self.logger.info('Initialize tf session.')
         self.sess = tf.Session()
@@ -21,7 +18,7 @@ class BaseModel(object):
 
     def save_session(self):
         self.logger.info('Save tf session.')
-        if os.path.exists(self.config.model_dir):
+        if not os.path.exists(self.config.model_dir):
             os.mkdir(self.config.model_dir)
         self.saver.save(self.sess, self.config.model_dir)
 

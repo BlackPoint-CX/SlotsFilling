@@ -42,11 +42,9 @@ class DataManager(object):
             sentence_ids = []
             sentence_labels = []
             for word in sentence_words:
-                word_id = self.word2id[word]
-                sentence_ids.append(word_id)
+                sentence_ids.append(self.word2id[word])
             for tag in sentence_tags:
-                label = self.tag2label[tag]
-                sentence_labels.append(label)
+                sentence_labels.append(self.tag2label[tag])
             data.append((sentence_ids, sentence_labels))
         return data
 
@@ -69,7 +67,6 @@ class DataManager(object):
 
         if len(ids):
             yield ids, labels
-
 
     def __len__(self):
         if self.length is None:
