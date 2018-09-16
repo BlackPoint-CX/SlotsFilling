@@ -63,7 +63,7 @@ if __name__ == '__main__':
     parser.add_argument('--dropout', type=float, default=0.5, help='dropout keep_prob')
     parser.add_argument('--embedding_dim', type=int, default=300, help='dim of embedding')
     parser.add_argument('--epoch', type=int, default=50, help='num of epochs')
-    parser.add_argument('--epochs_no_impv', type=int, default=1, help='epochs without improvement')
+    parser.add_argument('--epochs_no_impv', type=int, default=8, help='epochs without improvement')
     parser.add_argument('--hidden_size_lstm', type=int, default=128, help='dim of hidden layer')
     parser.add_argument('--lr', type=float, default=0.01, help='learning rate')
     parser.add_argument('--lr_decay', type=float, default=0.05, help='learning rate decay')
